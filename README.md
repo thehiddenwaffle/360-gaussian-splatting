@@ -30,11 +30,45 @@ git clone --recursive https://github.com/inuex35/360-gaussian-splatting
 
 ### Creating the Environment
 
-In addition to the original repository, install the following module as well:
+This project uses [uv](https://docs.astral.sh/uv/) to manage the Python environment (Python 3.14, pinned in `.python-version`).
+
+First, sync the regular dependencies (torch, torchvision, numpy, opencv, plyfile, pyproj, etc.):
 
 ```bash
-pip3 install submodules/diff-gaussian-rasterization submodules/simple-knn plyfile pyproj
+uv sync
 ```
+
+`torch`/`torchvision` are pulled from the PyTorch `cu126` wheel index (see `[tool.uv.sources]` in `pyproject.toml`). If your machine has a different CUDA toolkit/driver, point `[[tool.uv.index]]` in `pyproject.toml` at the matching `https://download.pytorch.org/whl/<cuXXX>` index instead.
+
+The CUDA extensions (`diff-gaussian-rasterization`, `simple-knn`) must then be compiled against the *same* CUDA toolkit version that built your `torch` wheel (`torch.version.cuda`), using `nvcc` from that toolkit (not necessarily the system default one):
+
+```bash
+CUDA_HOME=/usr/local/cuda-12.6 PATH=/usr/local/cuda-12.6/bin:$PATH \
+  uv pip install --no-build-isolation -e submodules/simple-knn -e submodules/diff-gaussian-rasterization
+```
+
+Adjust `CUDA_HOME`/`PATH` to wherever your CUDA 12.6 toolkit is installed (`nvcc --version` should report 12.6 to match `torch.version.cuda`).
+
+Verify the install:
+
+```bash
+uv run python -c "import torch, diff_gaussian_rasterization, simple_knn._C; print(torch.__version__, torch.cuda.is_available())"
+```
+
+#### Note on the CUDA submodules
+
+The upstream `diff-gaussian-rasterization` and `simple-knn` sources were written against an older CUDA/GCC toolchain and do not compile as-is with recent nvcc/GCC. This repo's submodules therefore point at patched forks, so `git clone --recursive` gives you a tree that builds — no manual patching required:
+
+| Submodule | Fork | Upstream |
+| --- | --- | --- |
+| `submodules/diff-gaussian-rasterization` | [thehiddenwaffle/360-diff-gaussian-rasterization](https://github.com/thehiddenwaffle/360-diff-gaussian-rasterization) (`main`) | [inuex35/360-diff-gaussian-rasterization](https://github.com/inuex35/360-diff-gaussian-rasterization) |
+| `submodules/simple-knn` | [thehiddenwaffle/simple-knn](https://github.com/thehiddenwaffle/simple-knn) (`patched`) | [gitlab.inria.fr/bkerbl/simple-knn](https://gitlab.inria.fr/bkerbl/simple-knn) |
+
+The fixes carried in the forks are:
+
+- `simple_knn.cu`: add `#include <cfloat>` (fixes `identifier "FLT_MAX" is undefined`).
+- `cuda_rasterizer/rasterizer_impl.h`: add `#include <cstdint>` (fixes `identifier "uint32_t"/"uint64_t" is undefined`).
+- `simple_knn/__init__.py`: added — the package shipped without one, so PEP 660 editable installs can't resolve `import simple_knn`.
 
 ### For omnigs rendering
 
@@ -85,7 +119,7 @@ data/your_data/reconstruction.json
 Then, start the training with the following command:
 
 ```bash
-python3 train.py -s data/your_data --panorama
+uv run python train.py -s data/your_data --panorama
 ```
 
 After training, results will be saved in the `output` directory. For training parameters and more details, refer to the Gaussian Splatting repository.
