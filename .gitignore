@@ -10,3 +10,9 @@ screenshots
 *.egg-info
 submodules/*/build
 submodules/*/*.egg-info
+
+# Capture data and OpenSfM working files (large binaries, not source)
+data
+*.MP4
+*.mp4
+*.insv

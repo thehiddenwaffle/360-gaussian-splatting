@@ -1,0 +1,70 @@
+# Slim CPU-only build of ind-bermuda-opensfm.
+#
+# Derived from the upstream Dockerfile, dropping the optional GPU feature
+# matchers (flash-attention, LightGlue, ALIKED, pypopsift) and the CUDA base
+# image. Those only provide alternative feature detectors; OpenSfM's stock
+# SIFT/HAHOG path is used instead, which is all that spherical reconstruction
+# for 360 Gaussian Splatting needs.
+#
+# Result is ~2GB instead of ~15-20GB, and builds in minutes instead of an hour.
+
+FROM ubuntu:20.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+    && apt-get install -y \
+        build-essential \
+        cmake \
+        git \
+        libeigen3-dev \
+        libopencv-dev \
+        libceres-dev \
+        python3-dev \
+        python3-numpy \
+        python3-opencv \
+        python3-pip \
+        python3-pyproj \
+        python3-scipy \
+        python3-yaml \
+        curl \
+        ninja-build \
+        libboost-all-dev \
+        sudo \
+        bash \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+# numpy is held below 2.x: OpenSfM's C extensions are built against the 1.x ABI.
+# The lower bound matters -- apt's python3-numpy (1.17.4) satisfies a bare
+# "numpy<2", so pip would skip the upgrade and leave scipy/opencv on a numpy
+# older than they support.
+RUN pip3 install --no-cache-dir \
+        "numpy>=1.19.5,<2" \
+        "scipy>=1.10.0" \
+        pyproj \
+        cloudpickle==0.4.0 \
+        exifread==2.1.2 \
+        flask==2.3.2 \
+        fpdf2==2.4.6 \
+        joblib \
+        matplotlib \
+        networkx==2.5 \
+        "Pillow>=8.1.1" \
+        "python-dateutil>=2.7" \
+        Sphinx==4.2.0 \
+        six \
+        xmltodict==0.10.2 \
+        wheel \
+        opencv-python
+
+RUN git clone --recursive https://github.com/inuex35/ind-bermuda-opensfm.git /source/OpenSfM \
+    && cd /source/OpenSfM \
+    && sed -i 's/\r$//' bin/* \
+    && python3 setup.py build
+
+RUN useradd -ms /bin/bash ubuntu && chown -R ubuntu:ubuntu /source/OpenSfM
+
+WORKDIR /source/OpenSfM
+USER ubuntu
+ENV PATH="${PATH}:/home/ubuntu/.local/bin"

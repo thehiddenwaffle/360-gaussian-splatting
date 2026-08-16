@@ -95,6 +95,45 @@ git clone https://github.com/inuex35/360-dn-diff-gaussian-rasterization submodul
 pip3 install submodules/360-dn-diff-gaussian-rasterization submodules/simple-knn plyfile pyproj openexr imageio
 ```
 
+## Starting from a 360 video
+
+The training pipeline consumes **images**, not video, so a 360 capture (e.g. RICOH THETA `.MP4`) has to be split into frames first. THETA footage is already stitched equirectangular, so no stitching step is needed — check with:
+
+```bash
+ffprobe -v error -select_streams v:0 -show_streams your_video.MP4 | grep -i projection
+# projection=equirectangular
+```
+
+Extract frames at a few fps. Every frame of 30fps footage is redundant and will make reconstruction far slower; 2-3 fps is a reasonable starting point, higher if the camera moved quickly:
+
+```bash
+mkdir -p data/your_data/images
+ffmpeg -i your_video.MP4 -vf fps=3 -q:v 2 data/your_data/images/%04d.jpg
+```
+
+> **Frames extracted by ffmpeg carry no EXIF**, so OpenSfM cannot infer the camera model and will silently fall back to a perspective camera, producing a wrong reconstruction. Force the spherical model with a `camera_models_overrides.json` in the dataset root (use your real frame dimensions):
+
+```json
+{
+    "all": {
+        "projection_type": "spherical",
+        "width": 3840,
+        "height": 1920
+    }
+}
+```
+
+After `extract_metadata`, confirm the override took effect — `camera_models.json` should report `"projection_type": "spherical"`.
+
+A `config.yaml` in the same directory tunes the run. OpenSfM defaults to `processes: 1` and exhaustive pair matching, which is slow; for sequential video frames:
+
+```yaml
+processes: 16                      # match your core count
+matching_order_neighbors: 20       # frames are sequential, skip exhaustive pairs
+matching_bow_neighbors: 20         # still catch loop closure on revisited areas
+feature_process_size_panorama: 4096
+```
+
 ## Training 360 Gaussian Splatting
 
 First, generate point clouds using images from a 360-degree camera with OpenSfM. Refer to the following repository and use this command for reconstruction:
@@ -105,6 +144,27 @@ bin/opensfm_run_all your_data
 ```
 
 Make sure the camera model is set to spherical. It is possible to use both spherical and perspective camera models simultaneously.
+
+`opensfm_run_all` also runs `mesh`, `undistort` and `compute_depthmaps`. Panorama training only needs `reconstruction.json`, so to save considerable time you can stop after `reconstruct`:
+
+```bash
+for step in extract_metadata detect_features match_features create_tracks reconstruct; do
+    bin/opensfm $step data/your_data
+done
+```
+
+### Running OpenSfM via Docker
+
+OpenSfM is a separate project with heavy C++ dependencies, so it's easiest to run in Docker. The upstream `Dockerfile` in ind-bermuda-opensfm builds a CUDA image with optional GPU feature matchers (flash-attention, LightGlue, ALIKED, pypopsift) totalling ~15-20GB; note its `TORCH_CUDA_ARCH_LIST` predates Ada (`sm_89`) GPUs. Those matchers are optional — OpenSfM's stock SIFT/HAHOG is sufficient for spherical reconstruction.
+
+`docker/Dockerfile.opensfm-slim` in this repo is a CPU-only alternative (~4GB, builds in a few minutes):
+
+```bash
+docker build -t opensfm-slim:latest -f docker/Dockerfile.opensfm-slim docker/
+docker run --rm -v $(pwd)/data/your_data:/data opensfm-slim:latest bin/opensfm_run_all /data
+```
+
+The dataset directory is bind-mounted at `/data`, and OpenSfM writes its outputs (including `reconstruction.json`) back into it alongside `images/`, which is exactly the layout `train.py` expects.
 
 After reconstruction, a `reconstruction.json` file will be generated. You can use opensfm viewer for visualization.
 ![image](https://github.com/inuex35/360-gaussian-splatting/assets/129066540/9dbf65e0-3d86-4569-aa82-916cc2ea66d0)
